@@ -50,7 +50,7 @@ void draw_btn(WINDOW *btn, char* msg, int color) {
     wmove(btn, BTN_SIZE_Y / 2, (BTN_SIZE_X - strlen(msg)) / 2);
 
     attron(A_BOLD);
-    wprintw(btn, msg);
+    wprintw(btn, "%s", msg);
     attroff(A_BOLD);
 
     wrefresh(btn);
