@@ -1,5 +1,5 @@
 # github link
-https://github.com/davideCaligola/advancedRobotProgramming/tree/assignment3
+https://github.com/davideCaligola/advancedRobotProgramming/tree/assignment2
 # Requirements
 To compile the application it is required:
 * `ncurses` library  
