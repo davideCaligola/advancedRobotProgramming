@@ -292,8 +292,9 @@ int main(int argc, char *argv[])
             // udapte picture data
             circleCenter = getCircleCenter();
             
-            // char msg[16];
-            uint32_t cmd_send = htonl(cmd);
+            // poll fro sending new command
+            char cmd_send[16];
+            snprintf(cmd_send, sizeof(cmd_send), "%i", cmd);
             int res = poll(&poll_cmdWrite, 1, timeout_poll);
             // error handling
             if (res == -1) {

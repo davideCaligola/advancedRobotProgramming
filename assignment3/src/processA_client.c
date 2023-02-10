@@ -214,14 +214,14 @@ int main(int argc, char *argv[])
 
         // New command came in
         else if (poll_cmdRead.revents & POLLIN) {
-            uint32_t cmd_received;
+            char cmd_received[16];
             int len = read(sockfd, &cmd_received, sizeof(cmd_received));
             if (len == -1) {
                 perror("process A client - failed read on sockfd");
                 exit(errno);
             }
             else if (len > 0) {
-                uint32_t cmd_remote = ntohl(cmd_received);
+                uint32_t cmd_remote = atoi(cmd_received);
                 if (cmd_remote == KEY_LEFT || cmd_remote == KEY_RIGHT ||
                     cmd_remote == KEY_UP || cmd_remote == KEY_DOWN) {
 
