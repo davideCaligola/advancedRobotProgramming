@@ -13,6 +13,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <poll.h>
+#include <time.h>   // for nanosleep
 #include "./../include/processA_utilities.h"
 #include "./../include/helper.h"
 
