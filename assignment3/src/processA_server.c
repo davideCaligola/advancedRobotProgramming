@@ -12,7 +12,6 @@
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <poll.h>
-#include <time.h>   // for nanosleep
 #include "./../include/processA_utilities.h"
 #include "./../include/helper.h"
 
@@ -78,7 +77,7 @@ int main(int argc, char *argv[])
     setName(SHARED_MEM_NAME, mode, sharedMem_name);
     sharedMem_fd = shm_open(sharedMem_name, O_RDWR, 0666);
     if (sharedMem_fd == -1) {
-        perror("process A - shm_open failed");
+        perror("process A server - shm_open failed");
         exit(EXIT_FAILURE);
     }
     ftruncate(sharedMem_fd, sharedMem_size);
@@ -86,7 +85,7 @@ int main(int argc, char *argv[])
         PROT_READ | PROT_WRITE,
         MAP_SHARED, sharedMem_fd, 0);
     if (pSharedPicture == MAP_FAILED) {
-        perror("process A - mmap failed");
+        perror("process A server - mmap failed");
         exit(EXIT_FAILURE);
     }
 
@@ -99,7 +98,7 @@ int main(int argc, char *argv[])
     setName(SEMAPHORE_WRITE, mode, semaphore_write_name);
     sem_t *pSemaphore_write =sem_open(semaphore_write_name, 0);
     if (pSemaphore_write == SEM_FAILED) {
-        perror("process A - failed sem_open on pSemaphore_write");
+        perror("process A server - failed sem_open on pSemaphore_write");
         exit(EXIT_FAILURE);
     }
 
@@ -109,7 +108,7 @@ int main(int argc, char *argv[])
     setName(SEMAPHORE_READ, mode, semaphore_read_name);
     sem_t *pSemaphore_read = sem_open(semaphore_read_name, 0);
     if (pSemaphore_read == SEM_FAILED) {
-        perror("process A - failed sem_open on pSemaphore_read");
+        perror("process A server - failed sem_open on pSemaphore_read");
         exit(EXIT_FAILURE);
     }
 
@@ -139,7 +138,7 @@ int main(int argc, char *argv[])
     }
 
     // listen for connection
-    listen(sockfd, 5);
+    listen(sockfd, 1);
 
     printf("Waiting for incoming connection...");
     fflush(stdout);
@@ -160,10 +159,9 @@ int main(int argc, char *argv[])
 
     if (sigqueue(pid_master, SIGUSR1, value) == -1)
     {
-        perror("process A - sigqueue SIGUSR1 to master process");
+        perror("process A server - sigqueue SIGUSR1 to master process");
         exit(EXIT_FAILURE);
     }
-
 
     /*--------------------------------------------------------------------
 				                    GUI
@@ -191,26 +189,74 @@ int main(int argc, char *argv[])
         exit(EXIT_FAILURE);
     }
 
-    // poll structure for writing commands from socket
-    struct pollfd poll_cmdWrite = {
+    // poll structure for reading commands from socket
+    struct pollfd poll_cmdRead = {
         .fd = sockfd_client,
-        .events = POLLOUT
+        .events = POLLIN
     };
-    int timeout_poll = 100;
+    int timeout = 100;
 
-    int timeout_nanosleep = 10;
-    // time structure for nanosleep
-    struct timespec reqNanoSleep = {
-        .tv_sec = timeout_nanosleep / 1000,
-        .tv_nsec = (timeout_nanosleep % 1000) * 1000000
-    };
-
-    /*--------------------------------------------------------------------
-				                    GUI
-    --------------------------------------------------------------------*/
     int terminate = 0;
+    // Infinite loop
     while (terminate == 0)
     {
+        /*--------------------------------------------------------------------
+                                REMOTE COMMAND
+        --------------------------------------------------------------------*/
+        int res = poll(&poll_cmdRead, 1, timeout);
+        // error handling
+        if (res == -1) {
+            // if not because of an incoming signal
+            if (errno != EINTR) {
+                perror("process A server - failed poll");
+                terminate = 1;
+            }
+        }
+
+        // New command came in
+        else if (poll_cmdRead.revents & POLLIN) {
+            char cmd_received[16];
+            int len = read(sockfd_client, &cmd_received, sizeof(cmd_received));
+            if (len == -1) {
+                perror("process A server - failed read on sockfd");
+                exit(errno);
+            }
+            else if (len > 0) {
+                uint32_t cmd_remote = atoi(cmd_received);
+                if (cmd_remote == KEY_LEFT || cmd_remote == KEY_RIGHT ||
+                    cmd_remote == KEY_UP || cmd_remote == KEY_DOWN) {
+
+                    move_circle(cmd_remote);
+                    draw_circle();
+
+                    // udapte picture data
+                    circleCenter = getCircleCenter();
+
+                    // create bmp picture
+                    pPictureBmp = createPicture(pictureHeight, pictureWidth,
+                        (int)(circleCenter.x*scaleFactor_x), (int)(circleCenter.y*scaleFactor_y),
+                        (int)(circleRadius*scaleFactor_x), (int)(circleRadius*scaleFactor_y));
+
+                    if (sharePicture(pPictureBmp, pSharedPicture, pSemaphore_write, pSemaphore_read) == -1)
+                    {
+                        exit(EXIT_FAILURE);
+                    }
+                } else {
+                    mvprintw(LINES - 1, 1, "received unrecognized remote command");
+                    refresh();
+                    sleep(1);
+                    for(int j = 0; j < COLS - BTN_SIZE_X - 2; j++) {
+                        mvaddch(LINES - 1, j, ' ');
+                    }
+                    refresh();
+                }
+            }
+        }
+        
+        /*--------------------------------------------------------------------
+                                GUI INTERACTION
+        --------------------------------------------------------------------*/
+
         // Get input in non-blocking mode
         int cmd = getch();
 
@@ -282,58 +328,6 @@ int main(int argc, char *argv[])
                 }
             }
         }
-
-        // If input is an arrow key, move circle accordingly...
-        else if (cmd == KEY_LEFT || cmd == KEY_RIGHT || cmd == KEY_UP || cmd == KEY_DOWN)
-        {
-            move_circle(cmd);
-            draw_circle();
-
-            // udapte picture data
-            circleCenter = getCircleCenter();
-            
-            // poll fro sending new command
-            char cmd_send[16];
-            snprintf(cmd_send, sizeof(cmd_send), "%i", cmd);
-            int res = poll(&poll_cmdWrite, 1, timeout_poll);
-            // error handling
-            if (res == -1) {
-                // if not because of an incoming signal
-                if (errno != EINTR) {
-                    perror("process A server - failed poll");
-                    terminate = 1;
-                }
-            }
-
-            // Ready to send new command
-            else if (poll_cmdWrite.revents & POLLOUT) {
-                int len = write(sockfd_client, &cmd_send, sizeof(cmd_send));
-                if (len == -1) {
-                    perror("process A server - failed sending command");
-                    exit(EXIT_FAILURE);
-                }
-
-                // create bmp picture
-                pPictureBmp = createPicture(pictureHeight, pictureWidth,
-                    (int)(circleCenter.x*scaleFactor_x), (int)(circleCenter.y*scaleFactor_y),
-                    (int)(circleRadius*scaleFactor_x), (int)(circleRadius*scaleFactor_y));
-
-                if (sharePicture(pPictureBmp, pSharedPicture, pSemaphore_write, pSemaphore_read) == -1)
-                {
-                    exit(EXIT_FAILURE);
-                }
-            }
-        }
-
-        // nanosleep to lighten the process
-        int retNanoSleep = nanosleep(&reqNanoSleep, NULL);
-        if (retNanoSleep)
-        {
-            if (errno != EINTR) {
-                perror("process A server - failed nanosleep");
-                exit(EXIT_FAILURE);
-            }
-        }
     }
 
     /*--------------------------------------------------------------------
@@ -351,7 +345,7 @@ int main(int argc, char *argv[])
         perror("process A server - failed close on sockfd_client");
         exit(EXIT_FAILURE);
     }
-    if (close(sockfd) == -1) {
+    if(close(sockfd) == -1) {
         perror("process A server - failed close on sockfd");
         exit(EXIT_FAILURE);
     }
@@ -360,11 +354,11 @@ int main(int argc, char *argv[])
         semaphores clean up
     ----------------------------*/
     if (sem_close(pSemaphore_write) == -1) {
-        perror("process A - failed sem_close pSemaphore_write");
+        perror("process A server - failed sem_close pSemaphore_write");
         exit(EXIT_FAILURE);
     }
     if (sem_close(pSemaphore_read) == -1) {
-        perror("process A - failed sem_close pSemaphore_read");
+        perror("process A server - failed sem_close pSemaphore_read");
         exit(EXIT_FAILURE);
     }
     // unlinking semaphore is done in master process
@@ -373,7 +367,7 @@ int main(int argc, char *argv[])
         shared memory clean up
     ----------------------------*/
     if (munmap(pSharedPicture, sharedMem_size) == -1) {
-        perror("process A - munmap failed");
+        perror("process A server - munmap failed");
         exit(EXIT_FAILURE);
     }
     // unlinking shared memory is done in master process
@@ -386,7 +380,7 @@ int main(int argc, char *argv[])
     value.sival_int = -1;
     if (sigqueue(pid_master, SIGUSR1, value) == -1)
     {
-        perror("process A - sigqueue SIGUSR1 to master process");
+        perror("process A server - sigqueue SIGUSR1 to master process");
         exit(EXIT_FAILURE);
     }
 
@@ -445,7 +439,7 @@ int sharePicture(bmpfile_t *pPictureBmp, PICTURE *pSharedPicture, sem_t *pSemaph
     if (sem_wait(pSemaphore_write) == -1) {
         if (errno != EINTR) {
             // does not fail if there is an incoming singal (i.e. SIGTERM)
-            perror("process A - print button: failed sem_wait on pSemaphore_write");
+            perror("process A server - print button: failed sem_wait on pSemaphore_write");
             return -1;
         }
     }
@@ -455,7 +449,7 @@ int sharePicture(bmpfile_t *pPictureBmp, PICTURE *pSharedPicture, sem_t *pSemaph
 
     // unlock semaphore for reading
     if (sem_post(pSemaphore_read) == -1) {
-        perror("process A - print button: failed sem_post on pSemaphore_read");
+        perror("process A server - print button: failed sem_post on pSemaphore_read");
         return -1;
     }
 }
@@ -480,7 +474,7 @@ int getFilename(char *outdir, char* fileName, char* fileExstension, char* outFil
 	if (ret  == -1)
 	{
 		// skip error due to output file does not exist yet
-        // keep default file
+        // keep default file name
         if (errno != ENOENT) {
 			perror("looking for ./out/circle_server.bmp - stat");
 			exit(EXIT_FAILURE);
@@ -499,11 +493,10 @@ int getFilename(char *outdir, char* fileName, char* fileExstension, char* outFil
 		// keeps on reading until there are not any more entries
 		while ((entry = readdir(dir)) != NULL) {
 			// check if the directory element has the default name
-			// if (strstr(entry->d_name, "circle") != NULL) {
-            if (strstr(entry->d_name, "circle_server") != NULL) {
+			if (strstr(entry->d_name, fileName) != NULL) {
 				char msg[100];
 				// by hypothesis, output file name is
-				// circle_server.bmp or circle_server_XXX.bmp
+				// circle.bmp or circle_XXX.bmp
 				// regex for getting the number of the file name
 				int retRegex = regcomp(&regex_fileNumber, "[0-9]+", REG_EXTENDED);
 				if (retRegex) {
